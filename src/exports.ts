@@ -22,3 +22,5 @@ export * from './webhooks.js';
 export * from './browsers/index.js';
 export * from './browsers/browsers.cdp.js';
 export * from './browsers/browsers.playwright.js';
+export * from './captcha/two-captcha.js';
+export * from './captcha/page-solver.js';

@@ -47,6 +47,11 @@ export const errorCodes = {
     description: `An internal error occurred when handling the request.`,
     message: 'HTTP/1.1 500 Internal Server Error',
   },
+  502: {
+    code: 502,
+    description: `An upstream service returned an invalid response.`,
+    message: 'HTTP/1.1 502 Bad Gateway',
+  },
   503: {
     code: 503,
     description: `Service is unavailable.`,
@@ -115,6 +120,7 @@ export enum WebsocketRoutes {
 }
 
 export enum HTTPRoutes {
+  captcha = '/captcha?(/)',
   chromeContent = '/chrome/content?(/)',
   chromeDownload = '/chrome/download?(/)',
   chromeFunction = '/chrome/function?(/)',

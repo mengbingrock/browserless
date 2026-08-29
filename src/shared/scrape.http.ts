@@ -24,6 +24,7 @@ import {
   bestAttempt,
   bestAttemptCatch,
   contentTypes,
+  createTwoCaptchaPageSolver,
   debugScreenshotOpts,
   dedent,
   isBase64Encoded,
@@ -57,6 +58,8 @@ export interface BodySchema {
   requestInterceptors?: Array<requestInterceptors>;
   setExtraHTTPHeaders?: { [key: string]: string };
   setJavaScriptEnabled?: boolean;
+  /** Solve a detected Cloudflare Turnstile challenge with 2Captcha. */
+  solveCaptchas?: boolean;
   url?: Parameters<Page['goto']>[0];
   userAgent?: Parameters<Page['setUserAgent']>[0];
   viewport?: Parameters<Page['setViewport']>[0];
@@ -229,6 +232,11 @@ export default class ChromiumScrapePostRoute extends BrowserHTTPRoute {
   browser = ChromiumCDP;
   concurrency = true;
   contentTypes = [contentTypes.json];
+  defaultLaunchOptions = (req: Request) => ({
+    stealth: Boolean(
+      (req.body as Partial<BodySchema> | undefined)?.solveCaptchas,
+    ),
+  });
   description = dedent(`
     A JSON-based API that returns text, html, and meta-data from a given list of selectors.
     Debugging information is available by sending in the appropriate flags in the "debugOpts"
@@ -275,6 +283,7 @@ export default class ChromiumScrapePostRoute extends BrowserHTTPRoute {
       rejectResourceTypes = [],
       setExtraHTTPHeaders,
       setJavaScriptEnabled,
+      solveCaptchas,
       userAgent,
       viewport,
       waitForTimeout,
@@ -306,6 +315,12 @@ export default class ChromiumScrapePostRoute extends BrowserHTTPRoute {
     // Close the page on every exit path — a throw below (evaluate timeout,
     // navigation failure) must not leak the page into a keep-alive browser.
     try {
+      const captchaSolver = await createTwoCaptchaPageSolver(
+        solveCaptchas,
+        page,
+        config,
+        logger,
+      );
       if (debugOpts?.console) {
         page.on('console', (msg) => messages.push(msg.text()));
       }
@@ -397,13 +412,17 @@ export default class ChromiumScrapePostRoute extends BrowserHTTPRoute {
         });
       }
 
-      const gotoResponse = url
+      let gotoResponse = url
         ? await page
             .goto(content, gotoOptions)
             .catch(bestAttemptCatch(bestAttempt))
         : await page
             .setContent(content, toSetContentOptions(gotoOptions))
             .catch(bestAttemptCatch(bestAttempt));
+
+      if (captchaSolver) {
+        gotoResponse = await captchaSolver.solveIfPresent(gotoResponse);
+      }
 
       if (addStyleTag.length) {
         for (const tag in addStyleTag) {

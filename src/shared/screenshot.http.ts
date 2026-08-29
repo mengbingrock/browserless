@@ -19,6 +19,7 @@ import {
   bestAttempt,
   bestAttemptCatch,
   contentTypes,
+  createTwoCaptchaPageSolver,
   dedent,
   isBase64Encoded,
   noop,
@@ -63,6 +64,8 @@ export interface BodySchema {
   selector?: string;
   setExtraHTTPHeaders?: { [key: string]: string };
   setJavaScriptEnabled?: boolean;
+  /** Solve a detected Cloudflare Turnstile challenge with 2Captcha. */
+  solveCaptchas?: boolean;
   url?: Parameters<Page['goto']>[0];
   userAgent?: Parameters<Page['setUserAgent']>[0];
   viewport?: Parameters<Page['setViewport']>[0];
@@ -79,6 +82,11 @@ export default class ScreenshotPost extends BrowserHTTPRoute {
   browser = ChromiumCDP;
   concurrency = true;
   contentTypes = [contentTypes.png, contentTypes.jpeg, contentTypes.text];
+  defaultLaunchOptions = (req: Request) => ({
+    stealth: Boolean(
+      (req.body as Partial<BodySchema> | undefined)?.solveCaptchas,
+    ),
+  });
   description = dedent(`
     A JSON-based API for getting a screenshot binary from either a supplied
     "url" or "html" payload in your request. Many options exist including
@@ -124,6 +132,7 @@ export default class ScreenshotPost extends BrowserHTTPRoute {
       scrollPage,
       setExtraHTTPHeaders,
       setJavaScriptEnabled,
+      solveCaptchas,
       userAgent,
       viewport,
       waitForTimeout,
@@ -159,6 +168,12 @@ export default class ScreenshotPost extends BrowserHTTPRoute {
     // navigation failure, timeout) must not leak the page into a
     // keep-alive browser.
     try {
+      const captchaSolver = await createTwoCaptchaPageSolver(
+        solveCaptchas,
+        page,
+        config,
+        logger,
+      );
       if (emulateMediaType) {
         await page.emulateMediaType(emulateMediaType);
       }
@@ -221,13 +236,17 @@ export default class ScreenshotPost extends BrowserHTTPRoute {
         });
       }
 
-      const gotoResponse = url
+      let gotoResponse = url
         ? await page
             .goto(content, gotoOptions)
             .catch(bestAttemptCatch(bestAttempt))
         : await page
             .setContent(content, toSetContentOptions(gotoOptions))
             .catch(bestAttemptCatch(bestAttempt));
+
+      if (captchaSolver) {
+        gotoResponse = await captchaSolver.solveIfPresent(gotoResponse);
+      }
 
       if (addStyleTag.length) {
         for (const tag in addStyleTag) {

@@ -259,6 +259,20 @@ export class Config extends EventEmitter {
   protected static = process.env.STATIC ?? path.join(__dirname, '..', 'static');
   protected debuggerDir = path.join(this.static, 'debugger');
   protected retries = +(process.env.RETRIES ?? '5');
+  protected twoCaptchaAPIKey =
+    process.env.TWO_CAPTCHA_API_KEY ??
+    process.env.APIKEY_2CAPTCHA ??
+    process.env['2CAPTCHA_API_KEY'] ??
+    null;
+  protected twoCaptchaAPIBaseURL =
+    process.env.TWO_CAPTCHA_API_BASE_URL ?? 'https://api.2captcha.com';
+  protected twoCaptchaPollingInterval = +(
+    process.env.TWO_CAPTCHA_POLLING_INTERVAL ?? '5000'
+  );
+  protected twoCaptchaTimeout = +(process.env.TWO_CAPTCHA_TIMEOUT ?? '120000');
+  protected twoCaptchaDetectionTimeout = +(
+    process.env.TWO_CAPTCHA_DETECTION_TIMEOUT ?? '10000'
+  );
   protected allowFileProtocol = !!parseEnvVars(false, 'ALLOW_FILE_PROTOCOL');
   protected allowGet = !!parseEnvVars(false, 'ALLOW_GET', 'ENABLE_API_GET');
   protected allowCors = !!parseEnvVars(false, 'CORS', 'ENABLE_CORS');
@@ -387,6 +401,21 @@ export class Config extends EventEmitter {
   }
   public getRetries(): number {
     return this.retries;
+  }
+  public getTwoCaptchaAPIKey(): string | null {
+    return this.twoCaptchaAPIKey;
+  }
+  public getTwoCaptchaAPIBaseURL(): string {
+    return this.twoCaptchaAPIBaseURL;
+  }
+  public getTwoCaptchaPollingInterval(): number {
+    return this.twoCaptchaPollingInterval;
+  }
+  public getTwoCaptchaTimeout(): number {
+    return this.twoCaptchaTimeout;
+  }
+  public getTwoCaptchaDetectionTimeout(): number {
+    return this.twoCaptchaDetectionTimeout;
   }
   public getAllowFileProtocol(): boolean {
     return this.allowFileProtocol;
@@ -666,6 +695,31 @@ export class Config extends EventEmitter {
   public setRetries(newRetries: number): number {
     this.emit('retries', newRetries);
     return (this.retries = newRetries);
+  }
+
+  public setTwoCaptchaAPIKey(apiKey: string | null): string | null {
+    this.emit('twoCaptchaAPIKey', apiKey);
+    return (this.twoCaptchaAPIKey = apiKey);
+  }
+
+  public setTwoCaptchaAPIBaseURL(url: string): string {
+    this.emit('twoCaptchaAPIBaseURL', url);
+    return (this.twoCaptchaAPIBaseURL = url);
+  }
+
+  public setTwoCaptchaPollingInterval(interval: number): number {
+    this.emit('twoCaptchaPollingInterval', interval);
+    return (this.twoCaptchaPollingInterval = interval);
+  }
+
+  public setTwoCaptchaTimeout(timeout: number): number {
+    this.emit('twoCaptchaTimeout', timeout);
+    return (this.twoCaptchaTimeout = timeout);
+  }
+
+  public setTwoCaptchaDetectionTimeout(timeout: number): number {
+    this.emit('twoCaptchaDetectionTimeout', timeout);
+    return (this.twoCaptchaDetectionTimeout = timeout);
   }
 
   public setCPULimit(limit: number): number {

@@ -19,6 +19,7 @@ import {
   bestAttempt,
   bestAttemptCatch,
   contentTypes,
+  createTwoCaptchaPageSolver,
   getPageContent,
   isBase64Encoded,
   noop,
@@ -50,6 +51,8 @@ export interface BodySchema {
   requestInterceptors?: Array<requestInterceptors>;
   setExtraHTTPHeaders?: { [key: string]: string };
   setJavaScriptEnabled?: setJavaScriptEnabled;
+  /** Solve a detected Cloudflare Turnstile challenge with 2Captcha. */
+  solveCaptchas?: boolean;
   url?: Parameters<Page['goto']>[0];
   userAgent?: Parameters<Page['setUserAgent']>[0];
   viewport?: Parameters<Page['setViewport']>[0];
@@ -76,6 +79,11 @@ export default class ChromiumContentPostRoute extends BrowserHTTPRoute {
   browser = ChromiumCDP;
   concurrency = true;
   contentTypes = [contentTypes.html];
+  defaultLaunchOptions = (req: Request) => ({
+    stealth: Boolean(
+      (req.body as Partial<BodySchema> | undefined)?.solveCaptchas,
+    ),
+  });
   description = `A JSON-based API. Given a "url" or "html" field, runs and returns HTML content after the page has loaded and JavaScript has parsed.`;
   method = Methods.post;
   path = [HTTPRoutes.chromiumContent, HTTPRoutes.content];
@@ -116,6 +124,7 @@ export default class ChromiumContentPostRoute extends BrowserHTTPRoute {
       rejectResourceTypes = [],
       setExtraHTTPHeaders,
       setJavaScriptEnabled,
+      solveCaptchas,
       userAgent,
       viewport,
       waitForTimeout,
@@ -145,6 +154,12 @@ export default class ChromiumContentPostRoute extends BrowserHTTPRoute {
     // navigation failure, timeout) must not leak the page into a
     // keep-alive browser.
     try {
+      const captchaSolver = await createTwoCaptchaPageSolver(
+        solveCaptchas,
+        page,
+        config,
+        logger,
+      );
       if (emulateMediaType) {
         await page.emulateMediaType(emulateMediaType);
       }
@@ -207,13 +222,17 @@ export default class ChromiumContentPostRoute extends BrowserHTTPRoute {
         });
       }
 
-      const gotoResponse = url
+      let gotoResponse = url
         ? await page
             .goto(content, gotoOptions)
             .catch(bestAttemptCatch(bestAttempt))
         : await page
             .setContent(content, toSetContentOptions(gotoOptions))
             .catch(bestAttemptCatch(bestAttempt));
+
+      if (captchaSolver) {
+        gotoResponse = await captchaSolver.solveIfPresent(gotoResponse);
+      }
 
       if (addStyleTag.length) {
         for (const tag in addStyleTag) {

@@ -781,6 +781,22 @@ export class ServerError extends Error {
     errorLog(this.message);
   }
 }
+export class BadGateway extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadGateway';
+    this.message = message;
+    errorLog(this.message);
+  }
+}
+export class ServiceUnavailable extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ServiceUnavailable';
+    this.message = message;
+    errorLog(this.message);
+  }
+}
 export class Unauthorized extends Error {
   constructor(message: string) {
     super(message);

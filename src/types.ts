@@ -784,6 +784,7 @@ export const BrowserlessWebKitRoutes = {
 
 export const BrowserlessManagementRoutes = {
   ActiveGetRoute: 'ActiveGetRoute',
+  CaptchaPostRoute: 'CaptchaPostRoute',
   ConfigGetRoute: 'ConfigGetRoute',
   KillGetRoute: 'KillGetRoute',
   MetaGetRoute: 'MetaGetRoute',

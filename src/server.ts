@@ -2,6 +2,7 @@ import * as http from 'http';
 import * as net from 'net';
 import * as stream from 'stream';
 import {
+  BadGateway,
   BadRequest,
   Logger as BlessLogger,
   Config,
@@ -13,6 +14,7 @@ import {
   Request,
   Response,
   Router,
+  ServiceUnavailable,
   Timeout,
   Token,
   TooManyRequests,
@@ -71,6 +73,14 @@ export class HTTPServer extends EventEmitter {
 
     if (e instanceof BadRequest) {
       return writeResponse(res, 400, e.message, contentType);
+    }
+
+    if (e instanceof BadGateway) {
+      return writeResponse(res, 502, e.message, contentType);
+    }
+
+    if (e instanceof ServiceUnavailable) {
+      return writeResponse(res, 503, e.message, contentType);
     }
 
     if (e instanceof NotFound) {

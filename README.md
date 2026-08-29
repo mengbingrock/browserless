@@ -141,8 +141,29 @@ Example Domain
 - **Unforked libraries** — Works seamlessly with standard Puppeteer and Playwright
 - **Fonts & emoji** — All system fonts and emoji support out-of-the-box
 - **Configurable timeouts** — Set session timers and health-checks to keep things running smoothly
+- **2Captcha integration** — Submit any 2Captcha API v2 task through `/captcha`, or opt into automatic Cloudflare Turnstile solving on the content, PDF, scrape, and screenshot APIs
 - **Error tolerant** — If Chrome crashes, Browserless won't
 - **ARM64 architecture support** — Full support for ARM64 platforms including Apple Silicon; some browsers (Edge, Chrome) have limited ARM64 compatibility
+
+#### 2Captcha solving
+
+Set `TWO_CAPTCHA_API_KEY` on the Browserless server, then add
+`"solveCaptchas": true` to a `/content`, `/pdf`, `/scrape`, or `/screenshot`
+request. Browserless intercepts Cloudflare Turnstile challenge parameters before
+page scripts run, waits for 2Captcha, and submits the returned token. The default
+poll interval is five seconds and the default solve timeout is two minutes;
+override them with `TWO_CAPTCHA_POLLING_INTERVAL` and `TWO_CAPTCHA_TIMEOUT`.
+
+The generic `/captcha` endpoint accepts any 2Captcha API v2 task:
+
+```bash
+curl -X POST 'http://localhost:3000/captcha?token=YOUR_BROWSERLESS_TOKEN' \
+  -H 'content-type: application/json' \
+  -d '{"task":{"type":"TurnstileTaskProxyless","websiteURL":"https://example.com","websiteKey":"SITE_KEY"}}'
+```
+
+The 2Captcha key is read only from server configuration and is never accepted
+from API clients or included in responses.
 
 ### Premium Features
 

@@ -19,6 +19,7 @@ import {
   bestAttempt,
   bestAttemptCatch,
   contentTypes,
+  createTwoCaptchaPageSolver,
   dedent,
   isBase64Encoded,
   noop,
@@ -51,6 +52,8 @@ export interface BodySchema {
   requestInterceptors?: Array<requestInterceptors>;
   setExtraHTTPHeaders?: { [key: string]: string };
   setJavaScriptEnabled?: boolean;
+  /** Solve a detected Cloudflare Turnstile challenge with 2Captcha. */
+  solveCaptchas?: boolean;
   url?: Parameters<Page['goto']>[0];
   userAgent?: Parameters<Page['setUserAgent']>[0];
   viewport?: Parameters<Page['setViewport']>[0];
@@ -76,6 +79,11 @@ export default class ChromiumPDFPostRoute extends BrowserHTTPRoute {
   browser = ChromiumCDP;
   concurrency = true;
   contentTypes = [contentTypes.pdf];
+  defaultLaunchOptions = (req: Request) => ({
+    stealth: Boolean(
+      (req.body as Partial<BodySchema> | undefined)?.solveCaptchas,
+    ),
+  });
   description = dedent(`
     A JSON-based API for getting a PDF binary from either a supplied
     "url" or "html" payload in your request. Many options exist for
@@ -121,6 +129,7 @@ export default class ChromiumPDFPostRoute extends BrowserHTTPRoute {
       options,
       setExtraHTTPHeaders,
       setJavaScriptEnabled,
+      solveCaptchas,
       userAgent,
       viewport,
       waitForEvent,
@@ -157,6 +166,12 @@ export default class ChromiumPDFPostRoute extends BrowserHTTPRoute {
     // navigation failure, timeout) must not leak the page into a
     // keep-alive browser.
     try {
+      const captchaSolver = await createTwoCaptchaPageSolver(
+        solveCaptchas,
+        page,
+        config,
+        logger,
+      );
       if (emulateMediaType) {
         await page.emulateMediaType(emulateMediaType);
       }
@@ -219,13 +234,17 @@ export default class ChromiumPDFPostRoute extends BrowserHTTPRoute {
         });
       }
 
-      const gotoResponse = url
+      let gotoResponse = url
         ? await page
             .goto(content, gotoOptions)
             .catch(bestAttemptCatch(bestAttempt))
         : await page
             .setContent(content, toSetContentOptions(gotoOptions))
             .catch(bestAttemptCatch(bestAttempt));
+
+      if (captchaSolver) {
+        gotoResponse = await captchaSolver.solveIfPresent(gotoResponse);
+      }
 
       if (addStyleTag.length) {
         for (const tag in addStyleTag) {
