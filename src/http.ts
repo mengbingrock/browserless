@@ -116,6 +116,7 @@ export enum WebsocketRoutes {
   playwrightChromium = '/playwright/chromium?(/)',
   playwrightFirefox = '/playwright/firefox?(/)',
   playwrightWebkit = '/playwright/webkit?(/)',
+  residentialProxyAgent = '/residential-proxy/agent?(/)',
   webkitPlaywright = '/webkit/playwright?(/)',
 }
 
@@ -163,6 +164,7 @@ export enum HTTPManagementRoutes {
   metrics = '/metrics?(/)',
   metricsTotal = '/metrics/total?(/)',
   pressure = '/pressure?(/)',
+  residentialProxyAgents = '/residential-proxy/agents?(/)',
   sessions = '/sessions?(/)',
   static = '/',
 }
@@ -199,6 +201,21 @@ export interface SystemQueryParameters {
    * object, or a base64-encoded JSON object.
    */
   launch?: CDPLaunchOptions | BrowserServerOptions | string;
+
+  /** Route this browser through a connected, consenting residential agent. */
+  residentialProxy?: boolean;
+
+  /** Optional two-letter country selector for residential proxy agents. */
+  residentialProxyCountry?: string;
+
+  /** Optional region selector for residential proxy agents. */
+  residentialProxyRegion?: string;
+
+  /** Optional city selector for residential proxy agents. */
+  residentialProxyCity?: string;
+
+  /** Keep one agent for the browser session, or rotate on each TCP connection. */
+  residentialProxyRotation?: 'connection' | 'session';
 
   /**
    * Override the system-level timeout for this request.

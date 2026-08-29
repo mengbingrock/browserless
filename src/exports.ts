@@ -24,3 +24,6 @@ export * from './browsers/browsers.cdp.js';
 export * from './browsers/browsers.playwright.js';
 export * from './captcha/two-captcha.js';
 export * from './captcha/page-solver.js';
+export * from './residential-proxy/protocol.js';
+export * from './residential-proxy/agent.js';
+export * from './residential-proxy/service.js';

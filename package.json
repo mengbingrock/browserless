@@ -15,7 +15,8 @@
     ".": "./build/exports.js"
   },
   "bin": {
-    "browserless": "bin/browserless.js"
+    "browserless": "bin/browserless.js",
+    "browserless-residential-agent": "bin/residential-proxy-agent.js"
   },
   "scripts": {
     "build": "npm run clean && npm run build:ts && npm run install:adblock && npm run build:schemas && npm run build:devtools && npm run build:openapi",

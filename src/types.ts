@@ -467,6 +467,7 @@ export interface BrowserlessSession {
   isTempDataDir: boolean;
   launchOptions: CDPLaunchOptions | BrowserServerOptions;
   numbConnected: number;
+  residentialProxyLeaseId?: string;
   resolver(val: unknown): void;
   routePath: string | string[];
   /**
@@ -791,6 +792,8 @@ export const BrowserlessManagementRoutes = {
   MetricsGetRoute: 'MetricsGetRoute',
   MetricsTotalGetRoute: 'MetricsTotalGetRoute',
   PressureGetRoute: 'PressureGetRoute',
+  ResidentialProxyAgentsGetRoute: 'ResidentialProxyAgentsGetRoute',
+  ResidentialProxyAgentWebSocketRoute: 'ResidentialProxyAgentWebSocketRoute',
   SessionsGetRoute: 'SessionsGetRoute',
   StaticGetRoute: 'StaticGetRoute',
 };

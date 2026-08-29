@@ -36,6 +36,14 @@ import {
   parseStringParam,
   pwVersionRegex,
 } from '@browserless.io/browserless';
+import {
+  ResidentialProxyLease,
+  ResidentialProxyService,
+} from '../residential-proxy/service.js';
+import type {
+  ResidentialProxyRotation,
+  ResidentialProxySelector,
+} from '../residential-proxy/protocol.js';
 import { Page } from 'puppeteer-core';
 import { deleteAsync } from 'del';
 import micromatch from 'micromatch';
@@ -78,6 +86,7 @@ export class BrowserManager {
     protected config: Config,
     protected hooks: Hooks,
     protected fileSystem: FileSystem,
+    protected residentialProxy = new ResidentialProxyService(config),
   ) {
     this.orphanedDataDirSweeper = setInterval(
       () => this.sweepOrphanedDataDirs(),
@@ -85,6 +94,10 @@ export class BrowserManager {
     );
     // Don't hold the process open for the sweeper
     this.orphanedDataDirSweeper.unref?.();
+  }
+
+  public getResidentialProxy(): ResidentialProxyService {
+    return this.residentialProxy;
   }
 
   protected browserIsChrome(b: BrowserInstance) {
@@ -370,10 +383,12 @@ export class BrowserManager {
   ) {
     const serverHTTPAddress = this.config.getExternalAddress();
     const serverWSAddress = this.config.getExternalWebSocketAddress();
+    const publicSession = { ...session };
+    delete publicSession.residentialProxyLeaseId;
 
     const sessions = [
       {
-        ...session,
+        ...publicSession,
         browser: browser.constructor.name,
         browserId: session.id,
         initialConnectURL: new URL(session.initialConnectURL, serverHTTPAddress)
@@ -495,14 +510,22 @@ export class BrowserManager {
           `browser.close() rejected for session "${session.id}": ${err}; proceeding with data-dir cleanup`,
         );
       } finally {
-        if (session.isTempDataDir) {
-          this.log.debug(`Deleting "${session.userDataDir}" user-data-dir`);
-          await this.removeUserDataDir(session.userDataDir);
+        try {
+          if (session.isTempDataDir) {
+            this.log.debug(`Deleting "${session.userDataDir}" user-data-dir`);
+            await this.removeUserDataDir(session.userDataDir);
+          }
+          // Unconditional: the scratch dir is browserless-owned even when the
+          // caller brought their own data dir. Ordered after browser.close() for
+          // the same reason as the data dir — Chrome releases its handles first.
+          await this.removeScratchDir(session.scratchDir);
+        } finally {
+          if (session.residentialProxyLeaseId) {
+            await this.residentialProxy.releaseLease(
+              session.residentialProxyLeaseId,
+            );
+          }
         }
-        // Unconditional: the scratch dir is browserless-owned even when the
-        // caller brought their own data dir. Ordered after browser.close() for
-        // the same reason as the data dir — Chrome releases its handles first.
-        await this.removeScratchDir(session.scratchDir);
       }
     }
   }
@@ -716,6 +739,59 @@ export class BrowserManager {
       ];
     }
 
+    const useResidentialProxy = parseBooleanParam(
+      req.parsed.searchParams,
+      'residentialProxy',
+      false,
+    );
+    const residentialProxyRotation = parseStringParam(
+      req.parsed.searchParams,
+      'residentialProxyRotation',
+      'session',
+    );
+    const residentialProxySelector: ResidentialProxySelector = {
+      city:
+        parseStringParam(req.parsed.searchParams, 'residentialProxyCity', '') ||
+        undefined,
+      country:
+        parseStringParam(
+          req.parsed.searchParams,
+          'residentialProxyCountry',
+          '',
+        ) || undefined,
+      region:
+        parseStringParam(
+          req.parsed.searchParams,
+          'residentialProxyRegion',
+          '',
+        ) || undefined,
+    };
+    if (useResidentialProxy) {
+      if (proxyServerParam) {
+        throw new BadRequest(
+          'residentialProxy cannot be combined with --proxy-server',
+        );
+      }
+      if (!['connection', 'session'].includes(residentialProxyRotation)) {
+        throw new BadRequest(
+          'residentialProxyRotation must be "session" or "connection"',
+        );
+      }
+      for (const [name, value] of Object.entries(residentialProxySelector)) {
+        if (value && (value.length > 64 || /[\r\n]/.test(value))) {
+          throw new BadRequest(`Invalid residential proxy ${name}`);
+        }
+      }
+      if (
+        residentialProxySelector.country &&
+        !/^[a-z]{2}$/i.test(residentialProxySelector.country)
+      ) {
+        throw new BadRequest(
+          'residentialProxyCountry must be a two-letter ISO country code',
+        );
+      }
+    }
+
     const manualUserDataDir =
       launchOptions.args
         ?.find((arg) => arg.includes('--user-data-dir='))
@@ -758,11 +834,44 @@ export class BrowserManager {
       }
       throw err;
     }
-    const browserEnv = {
+    const browserEnv: Record<string, string | undefined> = {
       ...process.env,
       ...(launchOptions as BrowserServerOptions).env,
       TMPDIR: scratchDir,
     };
+    // Browser child processes do not need server credentials. Removing them
+    // also prevents launcher debug output from publishing secrets.
+    for (const secret of [
+      'TOKEN',
+      'RESIDENTIAL_PROXY_AGENT_TOKEN',
+      'TWO_CAPTCHA_API_KEY',
+      'APIKEY_2CAPTCHA',
+      '2CAPTCHA_API_KEY',
+    ]) {
+      delete browserEnv[secret];
+    }
+
+    let residentialProxyLease: ResidentialProxyLease | undefined;
+    if (useResidentialProxy) {
+      try {
+        residentialProxyLease = await this.residentialProxy.acquireLease(
+          residentialProxySelector,
+          residentialProxyRotation as ResidentialProxyRotation,
+        );
+        launchOptions.args = [
+          ...(launchOptions.args || []).filter(
+            (arg) => !arg.includes('--proxy-server='),
+          ),
+          `--proxy-server=${residentialProxyLease.proxyURL}`,
+        ];
+      } catch (err) {
+        if (!manualUserDataDir && userDataDir) {
+          await this.removeUserDataDir(userDataDir);
+        }
+        await this.removeScratchDir(scratchDir);
+        throw err;
+      }
+    }
 
     const proxyServerArg = launchOptions.args?.find((arg) =>
       arg.includes('--proxy-server='),
@@ -832,6 +941,9 @@ export class BrowserManager {
       // Owned by browserless regardless of who supplied the data dir, so it is
       // reclaimed unconditionally.
       await this.removeScratchDir(scratchDir);
+      if (residentialProxyLease) {
+        await this.residentialProxy.releaseLease(residentialProxyLease.id);
+      }
       throw err;
     }
 
@@ -843,6 +955,7 @@ export class BrowserManager {
       isTempDataDir: !manualUserDataDir,
       launchOptions,
       numbConnected: 1,
+      residentialProxyLeaseId: residentialProxyLease?.id,
       resolver: noop,
       routePath: router.path,
       scratchDir,
@@ -908,6 +1021,7 @@ export class BrowserManager {
     await this.sweepOrphanedDataDirs();
     this.browsers = new Map();
     this.timers = new Map();
+    await this.residentialProxy.shutdown();
     await this.stop();
     this.log.info(`Shutdown complete`);
   }

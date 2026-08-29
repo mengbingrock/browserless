@@ -165,6 +165,53 @@ curl -X POST 'http://localhost:3000/captcha?token=YOUR_BROWSERLESS_TOKEN' \
 The 2Captcha key is read only from server configuration and is never accepted
 from API clients or included in responses.
 
+#### User-PC residential proxy agents
+
+Browserless can route an opted-in browser session through a consenting user's
+PC. The agent makes an outbound WebSocket connection to Browserless, so the PC
+does not expose a public listening port. This feature is disabled by default.
+
+Configure the Browserless server with a dedicated agent token (do not reuse the
+normal Browserless API token):
+
+```bash
+RESIDENTIAL_PROXY_ENABLED=true \
+RESIDENTIAL_PROXY_AGENT_TOKEN=replace-with-a-long-random-secret \
+npm start
+```
+
+On a user-owned PC, run the agent with explicit consent and self-declared geo
+tags. Remote servers require HTTPS/WSS:
+
+```bash
+browserless-residential-agent \
+  --server https://browserless.example.com \
+  --country US \
+  --region CA \
+  --city 'Los Angeles' \
+  --token replace-with-a-long-random-secret \
+  --consent
+```
+
+By default the agent can connect only to public IP addresses on ports 80 and 443. Restrict destinations further by repeating `--allow-host`, for example
+`--allow-host '*.example.com'`. The agent rejects loopback, private, link-local,
+metadata, multicast, and reserved address ranges after DNS resolution.
+
+Opt a browser request into the pool with query parameters:
+
+```bash
+curl -X POST \
+  'http://localhost:3000/chrome/content?token=YOUR_BROWSERLESS_TOKEN&residentialProxy=true&residentialProxyCountry=US&residentialProxyRegion=CA&residentialProxyRotation=session' \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com"}'
+```
+
+`residentialProxyRotation=session` (the default) pins one matching PC for the
+life of the browser. `connection` round-robins matching agents for each new TCP
+connection. Geo labels are supplied by each consenting agent; Browserless does
+not claim independent IP-geolocation verification. Authenticated server clients
+can inspect capacity with `GET /residential-proxy/agents`.
+
 ### Premium Features
 
 Our [Self-serve cloud and Enterprise offerings](https://www.browserless.io/pricing/?utm_source=github&utm_medium=referral&utm_campaign=oss-readme&utm_content=features) include all the general features plus extras, such as:

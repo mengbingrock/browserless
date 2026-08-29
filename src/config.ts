@@ -273,6 +273,20 @@ export class Config extends EventEmitter {
   protected twoCaptchaDetectionTimeout = +(
     process.env.TWO_CAPTCHA_DETECTION_TIMEOUT ?? '10000'
   );
+  protected residentialProxyEnabled = !!parseEnvVars(
+    false,
+    'RESIDENTIAL_PROXY_ENABLED',
+  );
+  protected residentialProxyAgentToken =
+    process.env.RESIDENTIAL_PROXY_AGENT_TOKEN ?? null;
+  protected residentialProxyHost =
+    process.env.RESIDENTIAL_PROXY_HOST ?? '127.0.0.1';
+  protected residentialProxyConnectTimeout = +(
+    process.env.RESIDENTIAL_PROXY_CONNECT_TIMEOUT ?? '15000'
+  );
+  protected residentialProxyMaxConnectionsPerAgent = +(
+    process.env.RESIDENTIAL_PROXY_MAX_CONNECTIONS_PER_AGENT ?? '20'
+  );
   protected allowFileProtocol = !!parseEnvVars(false, 'ALLOW_FILE_PROTOCOL');
   protected allowGet = !!parseEnvVars(false, 'ALLOW_GET', 'ENABLE_API_GET');
   protected allowCors = !!parseEnvVars(false, 'CORS', 'ENABLE_CORS');
@@ -416,6 +430,21 @@ export class Config extends EventEmitter {
   }
   public getTwoCaptchaDetectionTimeout(): number {
     return this.twoCaptchaDetectionTimeout;
+  }
+  public getResidentialProxyEnabled(): boolean {
+    return this.residentialProxyEnabled;
+  }
+  public getResidentialProxyAgentToken(): string | null {
+    return this.residentialProxyAgentToken;
+  }
+  public getResidentialProxyHost(): string {
+    return this.residentialProxyHost;
+  }
+  public getResidentialProxyConnectTimeout(): number {
+    return this.residentialProxyConnectTimeout;
+  }
+  public getResidentialProxyMaxConnectionsPerAgent(): number {
+    return this.residentialProxyMaxConnectionsPerAgent;
   }
   public getAllowFileProtocol(): boolean {
     return this.allowFileProtocol;
@@ -720,6 +749,31 @@ export class Config extends EventEmitter {
   public setTwoCaptchaDetectionTimeout(timeout: number): number {
     this.emit('twoCaptchaDetectionTimeout', timeout);
     return (this.twoCaptchaDetectionTimeout = timeout);
+  }
+
+  public setResidentialProxyEnabled(enabled: boolean): boolean {
+    this.emit('residentialProxyEnabled', enabled);
+    return (this.residentialProxyEnabled = enabled);
+  }
+
+  public setResidentialProxyAgentToken(token: string | null): string | null {
+    this.emit('residentialProxyAgentToken', token);
+    return (this.residentialProxyAgentToken = token);
+  }
+
+  public setResidentialProxyHost(host: string): string {
+    this.emit('residentialProxyHost', host);
+    return (this.residentialProxyHost = host);
+  }
+
+  public setResidentialProxyConnectTimeout(timeout: number): number {
+    this.emit('residentialProxyConnectTimeout', timeout);
+    return (this.residentialProxyConnectTimeout = timeout);
+  }
+
+  public setResidentialProxyMaxConnectionsPerAgent(limit: number): number {
+    this.emit('residentialProxyMaxConnectionsPerAgent', limit);
+    return (this.residentialProxyMaxConnectionsPerAgent = limit);
   }
 
   public setCPULimit(limit: number): number {
