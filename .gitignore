@@ -27,5 +27,8 @@ static/docs/swagger.min.json
 # Coverage
 coverage
 
+# Local fetch artifacts
+output/
+
 # Dev Files
 *.env*
