@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Nature Protocols PDF Fetch'
+  short_description: 'Check access and fetch Nature Protocols PDFs'
+  default_prompt: 'Use $nature-protocols-pdf-fetch to check entitlement and download a Nature Protocols article PDF.'

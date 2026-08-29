@@ -1,0 +1,4 @@
+interface:
+  display_name: 'STAR Protocols PDF Fetch'
+  short_description: 'Fetch STAR Protocols articles and PDFs'
+  default_prompt: 'Use $star-protocols-pdf-fetch to fetch a STAR Protocols article and download its PDF.'
