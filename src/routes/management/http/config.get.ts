@@ -28,6 +28,7 @@ export interface ResponseSchema {
   queuedAlertURL: string | null;
   rejectAlertURL: string | null;
   residentialProxyEnabled: boolean;
+  residentialProxyRequireEncryption: boolean;
   retries: number;
   timeout: number;
   timeoutAlertURL: string | null;
@@ -66,6 +67,8 @@ export default class ConfigGetRoute extends HTTPRoute {
       queuedAlertURL: config.getQueueAlertURL(),
       rejectAlertURL: config.getRejectAlertURL(),
       residentialProxyEnabled: config.getResidentialProxyEnabled(),
+      residentialProxyRequireEncryption:
+        config.getResidentialProxyRequireEncryption(),
       retries: config.getRetries(),
       timeout: config.getTimeout(),
       timeoutAlertURL: config.getTimeoutAlertURL(),

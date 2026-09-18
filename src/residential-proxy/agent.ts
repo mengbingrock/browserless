@@ -3,6 +3,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
 
+import { AgentHandshake, SecureChannel } from './secure-channel.js';
 import {
   ResidentialProxyAgentDescriptor,
   ResidentialProxyAgentMessage,
@@ -11,7 +12,9 @@ import {
   residentialProxyAgentPath,
   residentialProxyMaxFrameBytes,
   residentialProxyProtocolVersion,
+  residentialProxySecureProtocolVersion,
 } from './protocol.js';
+import { createControlProxyAgent } from './control-proxy.js';
 
 const blockedAddresses = new net.BlockList();
 for (const [address, prefix, type] of [
@@ -73,7 +76,15 @@ export interface ResidentialProxyAgentOptions {
   allowInsecureServer?: boolean;
   allowPrivateNetworks?: boolean;
   allowedPorts?: number[];
+  /**
+   * Dial the control WebSocket through this proxy, e.g.
+   * `socks5://127.0.0.1:1080`. Tunnelled traffic is untouched and still exits
+   * from this machine's own address.
+   */
+  controlProxy?: string;
   descriptor: ResidentialProxyAgentDescriptor;
+  /** Fall back to the v1 bearer-token, plaintext-frame protocol. */
+  legacyPlaintext?: boolean;
   log?: (message: string) => void;
   reconnect?: boolean;
   serverURL: string;
@@ -86,6 +97,11 @@ interface AgentTunnel {
 
 export class ResidentialProxyAgent {
   protected readonly allowHosts: string[];
+  protected readonly controlProxy?: string;
+  protected readonly legacyPlaintext: boolean;
+  protected channel?: SecureChannel;
+  protected handshake?: AgentHandshake;
+  protected ready = false;
   protected readonly allowPrivateNetworks: boolean;
   protected readonly allowedPorts: Set<number>;
   protected readonly descriptor: ResidentialProxyAgentDescriptor;
@@ -101,7 +117,9 @@ export class ResidentialProxyAgent {
     allowInsecureServer = false,
     allowPrivateNetworks = false,
     allowedPorts = [80, 443],
+    controlProxy,
     descriptor,
+    legacyPlaintext = false,
     log = console.log,
     reconnect = true,
     serverURL,
@@ -155,16 +173,33 @@ export class ResidentialProxyAgent {
     }
     parsed.pathname = residentialProxyAgentPath;
     parsed.search = '';
-    parsed.searchParams.set('version', String(residentialProxyProtocolVersion));
-    parsed.searchParams.set('agentId', descriptor.id);
-    parsed.searchParams.set('country', descriptor.country.toLowerCase());
-    if (descriptor.region) parsed.searchParams.set('region', descriptor.region);
-    if (descriptor.city) parsed.searchParams.set('city', descriptor.city);
-    parsed.searchParams.set(
-      'maxConnections',
-      String(descriptor.maxConnections),
-    );
+    if (legacyPlaintext) {
+      parsed.searchParams.set(
+        'version',
+        String(residentialProxyProtocolVersion),
+      );
+      parsed.searchParams.set('agentId', descriptor.id);
+      parsed.searchParams.set('country', descriptor.country.toLowerCase());
+      if (descriptor.region) {
+        parsed.searchParams.set('region', descriptor.region);
+      }
+      if (descriptor.city) parsed.searchParams.set('city', descriptor.city);
+      parsed.searchParams.set(
+        'maxConnections',
+        String(descriptor.maxConnections),
+      );
+    } else {
+      // v2 keeps the id and geo labels inside the encrypted handshake, so a
+      // TLS-terminating middlebox only learns that a v2 agent connected.
+      parsed.searchParams.set(
+        'version',
+        String(residentialProxySecureProtocolVersion),
+      );
+    }
 
+    if (controlProxy) createControlProxyAgent(controlProxy, false);
+    this.controlProxy = controlProxy;
+    this.legacyPlaintext = legacyPlaintext;
     this.allowHosts = allowHosts;
     this.allowPrivateNetworks = allowPrivateNetworks;
     this.allowedPorts = new Set(allowedPorts);
@@ -177,6 +212,15 @@ export class ResidentialProxyAgent {
 
   protected send(message: ResidentialProxyAgentMessage): void {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
+    if (!this.legacyPlaintext) {
+      if (!this.channel || !this.ready) return;
+      const frame = this.channel.seal(message);
+      if (frame.length > residentialProxyMaxFrameBytes) {
+        throw new Error('Residential proxy frame exceeds the size limit');
+      }
+      this.ws.send(frame);
+      return;
+    }
     const payload = JSON.stringify(message);
     if (Buffer.byteLength(payload) > residentialProxyMaxFrameBytes) {
       throw new Error('Residential proxy frame exceeds the size limit');
@@ -252,9 +296,77 @@ export class ResidentialProxyAgent {
     socket.once('close', () => this.tunnels.delete(id));
   }
 
-  protected handleMessage(raw: unknown): void {
-    const message =
-      parseResidentialProxyMessage<ResidentialProxyServerMessage>(raw);
+  protected toBuffer(raw: unknown): Buffer {
+    if (Buffer.isBuffer(raw)) return raw;
+    if (Array.isArray(raw)) return Buffer.concat(raw);
+    if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+    return Buffer.from(String(raw), 'utf8');
+  }
+
+  /**
+   * Handshake frames are plaintext JSON; everything after `ready` is a sealed
+   * binary frame. The ordering is fixed, so the phase flag is enough to tell
+   * them apart.
+   */
+  protected handleFrame(raw: unknown): void {
+    if (this.legacyPlaintext) {
+      this.handleMessage(
+        parseResidentialProxyMessage<ResidentialProxyServerMessage>(raw),
+      );
+      return;
+    }
+    if (!this.ready) {
+      this.handleHandshakeFrame(raw);
+      return;
+    }
+    try {
+      this.handleMessage(
+        this.channel!.open<ResidentialProxyServerMessage>(this.toBuffer(raw)),
+      );
+    } catch (error) {
+      this.log(
+        `Rejected a residential proxy frame: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.ws?.close(1008, 'Undecryptable residential proxy frame');
+    }
+  }
+
+  protected handleHandshakeFrame(raw: unknown): void {
+    const frame = parseResidentialProxyMessage<{ t?: string }>(raw);
+    try {
+      if (!frame || typeof frame.t !== 'string') {
+        throw new Error('Malformed handshake frame');
+      }
+      if (frame.t === 'hello') {
+        this.handshake = new AgentHandshake(
+          this.token,
+          residentialProxySecureProtocolVersion,
+        );
+        const { auth, channel } = this.handshake.auth(frame, {
+          descriptor: this.descriptor,
+        });
+        this.channel = channel;
+        this.ws?.send(JSON.stringify(auth));
+        return;
+      }
+      if (frame.t === 'ready') {
+        this.handshake?.confirm(frame);
+        this.ready = true;
+        this.log(
+          `Connected agent ${this.descriptor.id} (${this.descriptor.country.toUpperCase()}) over an encrypted channel`,
+        );
+        return;
+      }
+      throw new Error(`Unexpected handshake frame "${frame.t}"`);
+    } catch (error) {
+      this.log(
+        `Residential proxy handshake failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.ws?.close(1008, 'Handshake failed');
+    }
+  }
+
+  protected handleMessage(message: ResidentialProxyServerMessage | null): void {
     if (
       !message ||
       typeof message.type !== 'string' ||
@@ -295,8 +407,23 @@ export class ResidentialProxyAgent {
   protected connectOnce(signal?: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
       let opened = false;
+      this.channel = undefined;
+      this.handshake = undefined;
+      this.ready = false;
       const ws = new WebSocket(this.serverURL, {
-        headers: { 'x-residential-proxy-token': this.token },
+        // The proxy applies to this socket only -- tunnelled connections are
+        // opened with net.connect and keep this machine's residential IP.
+        ...(this.controlProxy
+          ? {
+              agent: createControlProxyAgent(
+                this.controlProxy,
+                this.serverURL.protocol === 'wss:',
+              ),
+            }
+          : {}),
+        headers: this.legacyPlaintext
+          ? { 'x-residential-proxy-token': this.token }
+          : {},
         maxPayload: residentialProxyMaxFrameBytes,
       });
       this.ws = ws;
@@ -305,11 +432,13 @@ export class ResidentialProxyAgent {
       signal?.addEventListener('abort', abort, { once: true });
       ws.once('open', () => {
         opened = true;
-        this.log(
-          `Connected agent ${this.descriptor.id} (${this.descriptor.country.toUpperCase()})`,
-        );
+        if (this.legacyPlaintext) {
+          this.log(
+            `Connected agent ${this.descriptor.id} (${this.descriptor.country.toUpperCase()})`,
+          );
+        }
       });
-      ws.on('message', (data) => this.handleMessage(data));
+      ws.on('message', (data) => this.handleFrame(data));
       ws.once('error', (error) => {
         if (!opened) reject(error);
       });
@@ -317,6 +446,9 @@ export class ResidentialProxyAgent {
         signal?.removeEventListener('abort', abort);
         for (const id of this.tunnels.keys()) this.closeTunnel(id);
         this.ws = undefined;
+        this.channel = undefined;
+        this.handshake = undefined;
+        this.ready = false;
         this.log(
           `Agent disconnected (${code}${reason.length ? `: ${reason}` : ''})`,
         );

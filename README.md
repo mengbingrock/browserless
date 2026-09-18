@@ -212,6 +212,43 @@ connection. Geo labels are supplied by each consenting agent; Browserless does
 not claim independent IP-geolocation verification. Authenticated server clients
 can inspect capacity with `GET /residential-proxy/agents`.
 
+##### Encrypted control channel
+
+The control channel is end-to-end encrypted by default (protocol v2). The agent
+and the server run an X25519 exchange, mix in the shared agent token, and seal
+every frame with ChaCha20-Poly1305, so a CDN, load balancer, or reverse proxy
+that terminates TLS relays ciphertext it cannot read. The token is never sent as
+a bearer header -- each side proves it holds the token during the handshake --
+and the agent id and geo labels travel inside the sealed handshake rather than
+in the URL. Frames carry a per-direction counter and random padding, so replayed
+or reordered frames are dropped and short frames are harder to size-fingerprint.
+
+Set `RESIDENTIAL_PROXY_REQUIRE_ENCRYPTION=true` on the server to refuse the
+legacy v1 plaintext protocol entirely. Agents built against an older server can
+still opt into it with `--legacy-plaintext`.
+
+##### Routing the control channel through a proxy
+
+Where a direct connection to the Browserless server is unreliable or filtered,
+dial the control channel through a local proxy:
+
+```bash
+browserless-residential-agent \
+  --server https://browserless.example.com \
+  --control-proxy socks5://127.0.0.1:1080 \
+  --country CN --token AGENT_TOKEN --consent
+```
+
+`--control-proxy` accepts `socks5://`, `socks5h://`, `http://` and `https://`
+(with optional `user:pass@`), which covers a local sing-box/Xray client, an
+`ssh -D` tunnel, or a corporate CONNECT proxy. Hostnames are resolved by the
+proxy, so the local resolver never sees the control endpoint.
+
+This applies to the control channel only. Tunnelled traffic is still opened
+directly from the agent's machine and keeps its residential IP -- routing it
+through the same proxy would replace that IP with the proxy's exit address.
+Note that an agent can only reach destinations its own network can reach.
+
 ### Premium Features
 
 Our [Self-serve cloud and Enterprise offerings](https://www.browserless.io/pricing/?utm_source=github&utm_medium=referral&utm_campaign=oss-readme&utm_content=features) include all the general features plus extras, such as:

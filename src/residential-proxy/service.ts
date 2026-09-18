@@ -14,6 +14,7 @@ import {
 import {
   ResidentialProxyAgentDescriptor,
   ResidentialProxyAgentMessage,
+  ResidentialProxyAuthPayload,
   ResidentialProxyRotation,
   ResidentialProxySelector,
   ResidentialProxyServerMessage,
@@ -22,12 +23,16 @@ import {
   parseResidentialProxyMessage,
   residentialProxyMaxFrameBytes,
   residentialProxyProtocolVersion,
+  residentialProxySecureProtocolVersion,
 } from './protocol.js';
+import { SecureChannel, ServerHandshake } from './secure-channel.js';
 
 const proxyHeaderLimit = 64 * 1024;
 
 interface RegisteredAgent {
   activeConnections: number;
+  /** Present for v2 agents; absent for legacy plaintext ones. */
+  channel?: SecureChannel;
   connectedAt: number;
   descriptor: ResidentialProxyAgentDescriptor;
   heartbeat?: NodeJS.Timeout;
@@ -182,15 +187,26 @@ export class ResidentialProxyService {
     return timingSafeEqual(digest(actual), digest(expected));
   }
 
-  protected parseAgentDescriptor(
-    request: IncomingMessage & { parsed: URL },
-  ): ResidentialProxyAgentDescriptor {
-    const params = request.parsed.searchParams;
-    const id = params.get('agentId')?.trim() ?? '';
-    const country = params.get('country')?.trim().toLowerCase() ?? '';
-    const region = params.get('region')?.trim() || undefined;
-    const city = params.get('city')?.trim() || undefined;
-    const version = Number(params.get('version'));
+  protected normalizeDescriptor(input: {
+    city?: unknown;
+    country?: unknown;
+    id?: unknown;
+    maxConnections?: unknown;
+    region?: unknown;
+  }): ResidentialProxyAgentDescriptor {
+    const id = typeof input.id === 'string' ? input.id.trim() : '';
+    const country =
+      typeof input.country === 'string'
+        ? input.country.trim().toLowerCase()
+        : '';
+    const region =
+      typeof input.region === 'string'
+        ? input.region.trim() || undefined
+        : undefined;
+    const city =
+      typeof input.city === 'string'
+        ? input.city.trim() || undefined
+        : undefined;
     const configuredLimit =
       this.config.getResidentialProxyMaxConnectionsPerAgent();
     const serverLimit =
@@ -198,14 +214,14 @@ export class ResidentialProxyService {
         ? configuredLimit
         : 20;
     const maxConnections = Math.min(
-      parsePositiveInteger(params.get('maxConnections'), serverLimit),
+      parsePositiveInteger(
+        input.maxConnections === undefined
+          ? null
+          : String(input.maxConnections),
+        serverLimit,
+      ),
       serverLimit,
     );
-    if (version !== residentialProxyProtocolVersion) {
-      throw new BadRequest(
-        `Unsupported residential proxy protocol version "${params.get('version') ?? ''}"`,
-      );
-    }
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) {
       throw new BadRequest('Agent id must use 1-64 letters, numbers, _ or -');
     }
@@ -223,12 +239,40 @@ export class ResidentialProxyService {
     return { city, country, id, maxConnections, region };
   }
 
+  protected parseAgentDescriptor(
+    request: IncomingMessage & { parsed: URL },
+  ): ResidentialProxyAgentDescriptor {
+    const params = request.parsed.searchParams;
+    return this.normalizeDescriptor({
+      city: params.get('city') ?? undefined,
+      country: params.get('country') ?? undefined,
+      id: params.get('agentId') ?? undefined,
+      maxConnections: params.get('maxConnections') ?? undefined,
+      region: params.get('region') ?? undefined,
+    });
+  }
+
+  protected toBuffer(raw: unknown): Buffer {
+    if (Buffer.isBuffer(raw)) return raw;
+    if (Array.isArray(raw)) return Buffer.concat(raw);
+    if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+    return Buffer.from(String(raw), 'utf8');
+  }
+
   protected send(
     agent: RegisteredAgent,
     message: ResidentialProxyServerMessage,
   ): void {
     if (agent.ws.readyState !== WebSocket.OPEN) {
       throw new ServiceUnavailable('Residential proxy agent disconnected');
+    }
+    if (agent.channel) {
+      const frame = agent.channel.seal(message);
+      if (frame.length > residentialProxyMaxFrameBytes) {
+        throw new Error('Residential proxy frame exceeds the size limit');
+      }
+      agent.ws.send(frame);
+      return;
     }
     const payload = JSON.stringify(message);
     if (Buffer.byteLength(payload) > residentialProxyMaxFrameBytes) {
@@ -263,8 +307,22 @@ export class ResidentialProxyService {
 
   protected handleAgentMessage(agent: RegisteredAgent, raw: unknown): void {
     agent.lastSeen = Date.now();
-    const message =
-      parseResidentialProxyMessage<ResidentialProxyAgentMessage>(raw);
+    let message: ResidentialProxyAgentMessage | null;
+    if (agent.channel) {
+      try {
+        message = agent.channel.open<ResidentialProxyAgentMessage>(
+          this.toBuffer(raw),
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Dropping an undecryptable frame from agent "${agent.descriptor.id}": ${error instanceof Error ? error.message : String(error)}`,
+        );
+        agent.ws.close(1008, 'Undecryptable residential proxy frame');
+        return;
+      }
+    } else {
+      message = parseResidentialProxyMessage<ResidentialProxyAgentMessage>(raw);
+    }
     if (!message || typeof message.id !== 'string') {
       agent.ws.close(1003, 'Invalid residential proxy frame');
       return;
@@ -305,11 +363,13 @@ export class ResidentialProxyService {
   protected registerAgent(
     ws: WebSocket,
     descriptor: ResidentialProxyAgentDescriptor,
+    channel?: SecureChannel,
   ): RegisteredAgent {
     const prior = this.agents.get(descriptor.id);
     prior?.ws.close(4001, 'Replaced by a newer connection');
     const agent: RegisteredAgent = {
       activeConnections: 0,
+      channel,
       connectedAt: Date.now(),
       descriptor,
       isAlive: true,
@@ -319,7 +379,7 @@ export class ResidentialProxyService {
     };
     this.agents.set(descriptor.id, agent);
     this.logger.info(
-      `Residential proxy agent "${descriptor.id}" connected (${descriptor.country.toUpperCase()}${descriptor.region ? `/${descriptor.region}` : ''}${descriptor.city ? `/${descriptor.city}` : ''})`,
+      `Residential proxy agent "${descriptor.id}" connected (${descriptor.country.toUpperCase()}${descriptor.region ? `/${descriptor.region}` : ''}${descriptor.city ? `/${descriptor.city}` : ''}) over ${channel ? 'an encrypted v2 channel' : 'the legacy plaintext protocol'}`,
     );
 
     ws.on('pong', () => {
@@ -361,17 +421,80 @@ export class ResidentialProxyService {
     return agent;
   }
 
+  /**
+   * Runs the v2 handshake over an upgraded socket: the server offers an
+   * ephemeral X25519 key, the agent answers with a MAC proving it holds the
+   * shared token, and the descriptor arrives sealed rather than in the URL.
+   */
+  protected performHandshake(ws: WebSocket): Promise<{
+    channel: SecureChannel;
+    descriptor: ResidentialProxyAgentDescriptor;
+  }> {
+    return new Promise((resolve, reject) => {
+      const handshake = new ServerHandshake(
+        this.config.getResidentialProxyAgentToken() ?? '',
+        residentialProxySecureProtocolVersion,
+      );
+      const timer = setTimeout(() => {
+        ws.close(1008, 'Residential proxy handshake timed out');
+        reject(new Unauthorized('Residential proxy handshake timed out'));
+      }, this.connectTimeout());
+      timer.unref?.();
+
+      ws.once('message', (raw) => {
+        clearTimeout(timer);
+        try {
+          const frame = parseResidentialProxyMessage<{ t?: string }>(raw);
+          if (!frame) throw new Error('Malformed handshake frame');
+          const { channel, payload, ready } =
+            handshake.accept<ResidentialProxyAuthPayload>(frame);
+          const descriptor = this.normalizeDescriptor(
+            payload?.descriptor ?? {},
+          );
+          ws.send(JSON.stringify(ready));
+          resolve({ channel, descriptor });
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          this.logger.warn(`Residential proxy handshake rejected: ${message}`);
+          ws.close(1008, 'Residential proxy handshake failed');
+          reject(new Unauthorized(message));
+        }
+      });
+      ws.send(JSON.stringify(handshake.hello()));
+    });
+  }
+
   public async acceptAgent(
     request: IncomingMessage & { parsed: URL },
     socket: Duplex,
     head: Buffer,
   ): Promise<void> {
     this.assertEnabled();
-    const supplied = request.headers['x-residential-proxy-token'];
-    if (typeof supplied !== 'string' || !this.tokenMatches(supplied)) {
-      throw new Unauthorized('Bad or missing residential proxy agent token');
+    const requested = request.parsed.searchParams.get('version') ?? '';
+    const version = Number(requested);
+    const secure = version === residentialProxySecureProtocolVersion;
+    if (!secure && version !== residentialProxyProtocolVersion) {
+      throw new BadRequest(
+        `Unsupported residential proxy protocol version "${requested}"`,
+      );
     }
-    const descriptor = this.parseAgentDescriptor(request);
+    if (!secure && this.config.getResidentialProxyRequireEncryption()) {
+      throw new Unauthorized(
+        'This server accepts encrypted v2 residential proxy agents only',
+      );
+    }
+
+    // Legacy agents authenticate up front with a bearer header; v2 agents
+    // prove the same secret inside the encrypted handshake instead.
+    let descriptor: ResidentialProxyAgentDescriptor | undefined;
+    if (!secure) {
+      const supplied = request.headers['x-residential-proxy-token'];
+      if (typeof supplied !== 'string' || !this.tokenMatches(supplied)) {
+        throw new Unauthorized('Bad or missing residential proxy agent token');
+      }
+      descriptor = this.parseAgentDescriptor(request);
+    }
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -384,10 +507,17 @@ export class ResidentialProxyService {
       socket.once('close', () => finish());
       socket.once('error', () => finish());
       this.wsServer.handleUpgrade(request, socket, head, (ws) => {
-        const agent = this.registerAgent(ws, descriptor);
         ws.once('close', () => finish());
         ws.once('error', () => finish());
-        agent.lastSeen = Date.now();
+        if (!secure) {
+          this.registerAgent(ws, descriptor!).lastSeen = Date.now();
+          return;
+        }
+        this.performHandshake(ws)
+          .then(({ channel, descriptor: negotiated }) => {
+            this.registerAgent(ws, negotiated, channel).lastSeen = Date.now();
+          })
+          .catch(() => finish());
       });
     });
   }

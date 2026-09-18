@@ -1,5 +1,10 @@
 export const residentialProxyAgentPath = '/residential-proxy/agent';
 export const residentialProxyProtocolVersion = 1;
+/**
+ * v2 adds an encrypted handshake: the agent authenticates with a MAC instead
+ * of a bearer header, and every frame after the handshake is ciphertext.
+ */
+export const residentialProxySecureProtocolVersion = 2;
 export const residentialProxyMaxFrameBytes = 1024 * 1024;
 
 export interface ResidentialProxyGeo {
@@ -15,6 +20,11 @@ export interface ResidentialProxySelector {
 }
 
 export type ResidentialProxyRotation = 'connection' | 'session';
+
+/** Sent inside the encrypted handshake so geo labels never appear in the URL. */
+export interface ResidentialProxyAuthPayload {
+  descriptor: ResidentialProxyAgentDescriptor;
+}
 
 export interface ResidentialProxyAgentDescriptor extends ResidentialProxyGeo {
   id: string;

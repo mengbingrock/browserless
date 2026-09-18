@@ -287,6 +287,10 @@ export class Config extends EventEmitter {
   protected residentialProxyMaxConnectionsPerAgent = +(
     process.env.RESIDENTIAL_PROXY_MAX_CONNECTIONS_PER_AGENT ?? '20'
   );
+  protected residentialProxyRequireEncryption = !!parseEnvVars(
+    false,
+    'RESIDENTIAL_PROXY_REQUIRE_ENCRYPTION',
+  );
   protected allowFileProtocol = !!parseEnvVars(false, 'ALLOW_FILE_PROTOCOL');
   protected allowGet = !!parseEnvVars(false, 'ALLOW_GET', 'ENABLE_API_GET');
   protected allowCors = !!parseEnvVars(false, 'CORS', 'ENABLE_CORS');
@@ -445,6 +449,10 @@ export class Config extends EventEmitter {
   }
   public getResidentialProxyMaxConnectionsPerAgent(): number {
     return this.residentialProxyMaxConnectionsPerAgent;
+  }
+  /** Refuse legacy v1 agents that would otherwise send frames in the clear. */
+  public getResidentialProxyRequireEncryption(): boolean {
+    return this.residentialProxyRequireEncryption;
   }
   public getAllowFileProtocol(): boolean {
     return this.allowFileProtocol;
@@ -774,6 +782,11 @@ export class Config extends EventEmitter {
   public setResidentialProxyMaxConnectionsPerAgent(limit: number): number {
     this.emit('residentialProxyMaxConnectionsPerAgent', limit);
     return (this.residentialProxyMaxConnectionsPerAgent = limit);
+  }
+
+  public setResidentialProxyRequireEncryption(required: boolean): boolean {
+    this.emit('residentialProxyRequireEncryption', required);
+    return (this.residentialProxyRequireEncryption = required);
   }
 
   public setCPULimit(limit: number): number {

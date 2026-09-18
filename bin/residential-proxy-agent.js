@@ -15,9 +15,11 @@ const { values } = parseArgs({
     'allowed-port': { multiple: true, type: 'string' },
     city: { type: 'string' },
     consent: { default: false, type: 'boolean' },
+    'control-proxy': { type: 'string' },
     country: { type: 'string' },
     help: { default: false, short: 'h', type: 'boolean' },
     id: { type: 'string' },
+    'legacy-plaintext': { default: false, type: 'boolean' },
     'max-connections': { default: '20', type: 'string' },
     region: { type: 'string' },
     server: { type: 'string' },
@@ -44,12 +46,23 @@ Security controls:
   --max-connections N   Concurrent tunnel cap (default: 20)
   --allow-insecure      Permit ws:// to a non-local trusted development server
 
+Transport:
+  --control-proxy URL   Dial the control channel through socks5://, socks5h://,
+                        http:// or https:// (e.g. a local sing-box/Xray client,
+                        or ssh -D). Only the control channel uses it; tunnelled
+                        traffic still exits from this machine's own IP.
+  --legacy-plaintext    Speak the v1 bearer-token protocol for an older server
+
 Optional geo tags:
   --region REGION
   --city CITY
   --id ID               Stable agent id (default: hostname plus random suffix)
 
-The token may be supplied with RESIDENTIAL_PROXY_AGENT_TOKEN instead of --token.
+The token may be supplied with RESIDENTIAL_PROXY_AGENT_TOKEN instead of --token,
+and the control proxy with RESIDENTIAL_PROXY_CONTROL_PROXY instead of
+--control-proxy. By default the control channel is end-to-end encrypted with
+keys derived from the token, so the server -- not a CDN or a load balancer --
+is the only party that can read tunnel frames.
 `;
 
 if (values.help) {
@@ -92,10 +105,15 @@ const stop = () => controller.abort();
 process.once('SIGINT', stop);
 process.once('SIGTERM', stop);
 
+const controlProxy =
+  values['control-proxy'] ?? process.env.RESIDENTIAL_PROXY_CONTROL_PROXY;
+
 const agent = new ResidentialProxyAgent({
   allowHosts: parseList(values['allow-host'], ['*']),
   allowInsecureServer: values['allow-insecure'],
   allowedPorts,
+  controlProxy,
+  legacyPlaintext: values['legacy-plaintext'],
   descriptor: {
     city: values.city,
     country: values.country,
@@ -110,4 +128,12 @@ const agent = new ResidentialProxyAgent({
 console.log(
   `Starting consented residential agent ${agentId}; public destinations only, ports ${allowedPorts.join(', ')}`,
 );
+console.log(
+  values['legacy-plaintext']
+    ? 'Control channel: legacy v1 (TLS only)'
+    : 'Control channel: encrypted v2 (X25519 + ChaCha20-Poly1305)',
+);
+if (controlProxy) {
+  console.log(`Control channel dialled through ${controlProxy}`);
+}
 await agent.run(controller.signal);

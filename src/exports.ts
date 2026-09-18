@@ -27,3 +27,5 @@ export * from './captcha/page-solver.js';
 export * from './residential-proxy/protocol.js';
 export * from './residential-proxy/agent.js';
 export * from './residential-proxy/service.js';
+export * from './residential-proxy/secure-channel.js';
+export * from './residential-proxy/control-proxy.js';
