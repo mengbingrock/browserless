@@ -19,7 +19,7 @@ import {
   mimeTypes,
 } from '@browserless.io/browserless';
 import { FunctionRunner } from './client.js';
-import { Page, Target } from 'puppeteer-core';
+import { Page } from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
 
@@ -93,14 +93,12 @@ export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
     const page = (await browser.newPage()) as UnwrapPromise<
       ReturnType<ChromiumCDP['newPage']>
     >;
-    let removeTargetListener = () => {};
+    let removePageListener = () => {};
 
     if (options.solveCaptchas) {
-      const onTargetCreated = async (target: Target) => {
-        if (target.type() !== 'page' || target === page.target()) return;
-        removeTargetListener();
-        const functionPage = await target.page();
-        if (!functionPage) return;
+      const onNewPage = async (functionPage: Page) => {
+        if (functionPage === page) return;
+        removePageListener();
 
         try {
           const solver = await createTwoCaptchaPageSolver(
@@ -141,9 +139,12 @@ export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
           );
         }
       };
-      browser.on('targetcreated', onTargetCreated);
-      removeTargetListener = () =>
-        browser.off('targetcreated', onTargetCreated);
+      // BrowserInstance intentionally abstracts Puppeteer's target events and
+      // emits the fully constructed Page as `newPage`. Listening for
+      // `targetcreated` here never fired, leaving FunctionRunner waiting for
+      // the CAPTCHA bridge until its protocol timeout elapsed.
+      browser.on('newPage', onNewPage);
+      removePageListener = () => browser.off('newPage', onNewPage);
     }
     await page.setRequestInterception(true);
 
@@ -252,14 +253,14 @@ export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
           throw new BadRequest(e.message);
         });
 
-      removeTargetListener();
+      removePageListener();
       return {
         contentType,
         page,
         payload,
       };
     } catch (e) {
-      removeTargetListener();
+      removePageListener();
       page.removeAllListeners();
       page.close().catch(() => {});
       throw e;
