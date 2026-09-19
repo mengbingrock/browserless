@@ -27,6 +27,12 @@ node scripts/fetch_star_protocols_pdf.mjs \
   --solve-captchas
 ```
 
+When the AWS browser needs a connected residential agent, add
+`--residential-proxy` plus any available geo selectors, for example
+`--residential-proxy-country US --residential-proxy-region CA
+--residential-proxy-city 'Los Angeles'`. The default rotation is `session`, so
+the article challenge and PDF request retain one egress identity.
+
 When Browserless is remote and only exposes plain HTTP, prefer an SSH tunnel instead of transmitting its token publicly. The helper accepts any endpoint reachable from the machine running it.
 
 The helper performs these stages in one Browserless `/function` session so the

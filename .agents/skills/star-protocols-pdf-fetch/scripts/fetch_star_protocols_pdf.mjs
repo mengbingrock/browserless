@@ -11,6 +11,11 @@ const { values } = parseArgs({
     endpoint: { default: 'http://127.0.0.1:3000', type: 'string' },
     help: { default: false, short: 'h', type: 'boolean' },
     out: { type: 'string' },
+    'residential-proxy': { default: false, type: 'boolean' },
+    'residential-proxy-city': { type: 'string' },
+    'residential-proxy-country': { type: 'string' },
+    'residential-proxy-region': { type: 'string' },
+    'residential-proxy-rotation': { default: 'session', type: 'string' },
     'solve-captchas': { default: false, type: 'boolean' },
     timeout: { default: '180000', type: 'string' },
   },
@@ -22,7 +27,9 @@ Usage:
   BROWSERLESS_TOKEN=... node fetch_star_protocols_pdf.mjs \\
     --article 'https://www.cell.com/star-protocols/fulltext/ARTICLE_ID' \\
     --out output/pdf/ARTICLE_ID.pdf [--endpoint http://127.0.0.1:3000] \\
-    [--solve-captchas] [--timeout 180000]
+    [--solve-captchas] [--timeout 180000] [--residential-proxy] \\
+    [--residential-proxy-country US] [--residential-proxy-region CA] \\
+    [--residential-proxy-city 'Los Angeles']
 `;
 
 if (values.help) {
@@ -47,6 +54,11 @@ const endpoint = new URL(values.endpoint);
 const timeout = Number(values.timeout);
 if (!Number.isInteger(timeout) || timeout < 1000) {
   throw new Error('--timeout must be an integer of at least 1000 milliseconds');
+}
+if (!['connection', 'session'].includes(values['residential-proxy-rotation'])) {
+  throw new Error(
+    '--residential-proxy-rotation must be "connection" or "session"',
+  );
 }
 
 const request = async (url, init) => {
@@ -159,6 +171,31 @@ functionURL.searchParams.set(
   'launch',
   Buffer.from(JSON.stringify({ stealth: true })).toString('base64'),
 );
+if (values['residential-proxy']) {
+  functionURL.searchParams.set('residentialProxy', 'true');
+  functionURL.searchParams.set(
+    'residentialProxyRotation',
+    values['residential-proxy-rotation'],
+  );
+  if (values['residential-proxy-country']) {
+    functionURL.searchParams.set(
+      'residentialProxyCountry',
+      values['residential-proxy-country'],
+    );
+  }
+  if (values['residential-proxy-region']) {
+    functionURL.searchParams.set(
+      'residentialProxyRegion',
+      values['residential-proxy-region'],
+    );
+  }
+  if (values['residential-proxy-city']) {
+    functionURL.searchParams.set(
+      'residentialProxyCity',
+      values['residential-proxy-city'],
+    );
+  }
+}
 
 const pdfResponse = await request(functionURL, {
   body: JSON.stringify({
@@ -204,6 +241,7 @@ console.log(
       bytes: pdf.byteLength,
       output: outputPath,
       pdfURL: result.pdfURL,
+      residentialProxy: values['residential-proxy'],
       sha256: createHash('sha256').update(pdf).digest('hex'),
       solveCaptchas: values['solve-captchas'],
       title: result.title ?? null,
