@@ -67,7 +67,10 @@ describe('TwoCaptchaPageSolver', function () {
                 return 'original';
               }
             };
+            let onloadCalls = 0;
             window.khCN8 = () => {
+              onloadCalls += 1;
+              if (onloadCalls === 1) return;
               window.turnstile.render(null, {
                 action: 'managed',
                 callback: token => document.body.dataset.token = token,
@@ -76,6 +79,7 @@ describe('TwoCaptchaPageSolver', function () {
                 sitekey: 'captured-site-key'
               });
             };
+            window.khCN8();
             window.khCN8();
           </script>
         `)}`,

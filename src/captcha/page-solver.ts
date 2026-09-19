@@ -115,7 +115,11 @@ export class TwoCaptchaPageSolver {
       }
 
       try {
-        if (this.renderBreakpointId) {
+        const renderBreakpointId = this.renderBreakpointId;
+        const hitRenderBreakpoint =
+          renderBreakpointId !== undefined &&
+          event.hitBreakpoints?.includes(renderBreakpointId);
+        if (hitRenderBreakpoint) {
           const evaluated = await client.send('Debugger.evaluateOnCallFrame', {
             callFrameId: frame.callFrameId,
             expression: `(() => {
@@ -143,11 +147,11 @@ export class TwoCaptchaPageSolver {
           }
           await client
             .send('Debugger.removeBreakpoint', {
-              breakpointId: this.renderBreakpointId,
+              breakpointId: renderBreakpointId,
             })
             .catch(() => {});
           this.renderBreakpointId = undefined;
-        } else {
+        } else if (!this.renderBreakpointId) {
           const evaluated = await client.send('Debugger.evaluateOnCallFrame', {
             callFrameId: frame.callFrameId,
             expression: 'window.turnstile && window.turnstile.render',
