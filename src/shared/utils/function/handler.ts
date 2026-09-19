@@ -11,6 +11,7 @@ import {
   UnwrapPromise,
   contentTypes,
   convertIfBase64,
+  createTwoCaptchaPageSolver,
   exists,
   getFinalPathSegment,
   getTokenFromRequest,
@@ -18,7 +19,7 @@ import {
   mimeTypes,
 } from '@browserless.io/browserless';
 import { FunctionRunner } from './client.js';
-import { Page } from 'puppeteer-core';
+import { Page, Target } from 'puppeteer-core';
 import fs from 'fs';
 import path from 'path';
 
@@ -36,6 +37,7 @@ interface JSONSchema {
 interface HandlerOptions {
   downloadPath?: string;
   protocolTimeout?: number;
+  solveCaptchas?: boolean;
 }
 
 export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
@@ -91,6 +93,58 @@ export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
     const page = (await browser.newPage()) as UnwrapPromise<
       ReturnType<ChromiumCDP['newPage']>
     >;
+    let removeTargetListener = () => {};
+
+    if (options.solveCaptchas) {
+      const onTargetCreated = async (target: Target) => {
+        if (target.type() !== 'page' || target === page.target()) return;
+        removeTargetListener();
+        const functionPage = await target.page();
+        if (!functionPage) return;
+
+        try {
+          const solver = await createTwoCaptchaPageSolver(
+            true,
+            functionPage,
+            config,
+            logger,
+          );
+          if (!solver) return;
+
+          let solvePromise: Promise<void> = Promise.resolve();
+          functionPage.on('response', (response) => {
+            const headers = response.headers();
+            const isChallenge =
+              headers['cf-mitigated'] === 'challenge' ||
+              response.status() === 403;
+            if (
+              !isChallenge ||
+              !response.request().isNavigationRequest() ||
+              response.frame() !== functionPage.mainFrame()
+            ) {
+              return;
+            }
+            solvePromise = solver
+              .solveIfPresent(response)
+              .then(() => undefined);
+          });
+          await functionPage.exposeFunction(
+            '__browserlessWaitForCaptcha',
+            async () => solvePromise,
+          );
+        } catch (error) {
+          await functionPage.exposeFunction(
+            '__browserlessWaitForCaptcha',
+            async () => {
+              throw error;
+            },
+          );
+        }
+      };
+      browser.on('targetcreated', onTargetCreated);
+      removeTargetListener = () =>
+        browser.off('targetcreated', onTargetCreated);
+    }
     await page.setRequestInterception(true);
 
     /**
@@ -198,12 +252,14 @@ export default (config: Config, logger: Logger, options: HandlerOptions = {}) =>
           throw new BadRequest(e.message);
         });
 
+      removeTargetListener();
       return {
         contentType,
         page,
         payload,
       };
     } catch (e) {
+      removeTargetListener();
       page.removeAllListeners();
       page.close().catch(() => {});
       throw e;

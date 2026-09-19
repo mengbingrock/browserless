@@ -63,52 +63,26 @@ const request = async (url, init) => {
   return response;
 };
 
-const contentURL = new URL('/content', endpoint);
-contentURL.searchParams.set('token', token);
-contentURL.searchParams.set('timeout', String(timeout));
-
-const contentResponse = await request(contentURL, {
-  body: JSON.stringify({
-    gotoOptions: {
-      timeout: Math.min(timeout, 120000),
-      waitUntil: 'networkidle2',
-    },
-    solveCaptchas: values['solve-captchas'],
-    url: articleURL.href,
-    waitForTimeout: 5000,
-  }),
-  headers: { 'content-type': 'application/json' },
-  method: 'POST',
-});
-const html = await contentResponse.text();
-
-const decodeHTMLAttribute = (value) =>
-  value
-    .replaceAll('&amp;', '&')
-    .replaceAll('&#38;', '&')
-    .replaceAll('&#x26;', '&');
-
-const pdfMatch = html.match(/href=["']([^"']*\/action\/showPdf\?[^"']+)["']/i);
-if (!pdfMatch?.[1]) {
-  throw new Error(
-    'The rendered article did not contain an /action/showPdf link',
-  );
-}
-const pdfURL = new URL(decodeHTMLAttribute(pdfMatch[1]), articleURL);
-
-const title =
-  html.match(
-    /<meta\s+name=["']citation_title["']\s+content=["']([^"']+)/i,
-  )?.[1] ??
-  html.match(/<title>([^<]+)/i)?.[1] ??
-  null;
-
 const functionCode = String.raw`
-export default async ({ page, context }) => {
-  await page.goto(context.articleURL, {
+export default async ({ page, context, goto }) => {
+  await goto(context.articleURL, {
     waitUntil: 'networkidle2',
     timeout: context.navigationTimeout,
   });
+
+  const article = await page.evaluate(() => ({
+    pdfLink: [...document.querySelectorAll('a[href]')]
+      .map(link => link.href)
+      .find(href => /\/action\/showPdf\?/i.test(href)),
+    title:
+      document.querySelector('meta[name="citation_title"]')?.content ||
+      document.title ||
+      null,
+  }));
+  const { pdfLink, title } = article;
+  if (!pdfLink) {
+    throw new Error('The rendered article did not contain an /action/showPdf link');
+  }
 
   const client = await page.createCDPSession();
   await client.send('Fetch.enable', {
@@ -138,11 +112,18 @@ export default async ({ page, context }) => {
           requestId: event.requestId,
         });
         clearTimeout(timer);
-        resolve(
-          response.base64Encoded
-            ? Uint8Array.from(atob(response.body), (char) => char.charCodeAt(0))
-            : new TextEncoder().encode(response.body),
-        );
+        const bytes = response.base64Encoded
+          ? Uint8Array.from(atob(response.body), char => char.charCodeAt(0))
+          : new TextEncoder().encode(response.body);
+        let binary = '';
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        resolve({
+          pdfBase64: btoa(binary),
+          pdfURL: event.request.url,
+          title,
+        });
       } catch (error) {
         clearTimeout(timer);
         reject(error);
@@ -150,8 +131,7 @@ export default async ({ page, context }) => {
     });
   });
 
-  page
-    .goto(context.pdfURL, {
+  goto(pdfLink, {
       referer: context.articleURL,
       waitUntil: 'domcontentloaded',
       timeout: context.navigationTimeout,
@@ -176,13 +156,21 @@ const pdfResponse = await request(functionURL, {
     context: {
       articleURL: articleURL.href,
       navigationTimeout: Math.min(timeout, 120000),
-      pdfURL: pdfURL.href,
     },
+    solveCaptchas: values['solve-captchas'],
   }),
   headers: { 'content-type': 'application/json' },
   method: 'POST',
 });
-const pdf = new Uint8Array(await pdfResponse.arrayBuffer());
+const result = await pdfResponse.json();
+if (
+  !result ||
+  typeof result.pdfBase64 !== 'string' ||
+  typeof result.pdfURL !== 'string'
+) {
+  throw new Error('Browserless returned an invalid STAR Protocols result');
+}
+const pdf = new Uint8Array(Buffer.from(result.pdfBase64, 'base64'));
 const magic = new TextDecoder().decode(pdf.slice(0, 5));
 if (!magic.startsWith('%PDF-')) {
   throw new Error(
@@ -205,10 +193,10 @@ console.log(
       articleURL: articleURL.href,
       bytes: pdf.byteLength,
       output: outputPath,
-      pdfURL: pdfURL.href,
+      pdfURL: result.pdfURL,
       sha256: createHash('sha256').update(pdf).digest('hex'),
       solveCaptchas: values['solve-captchas'],
-      title,
+      title: result.title ?? null,
     },
     null,
     2,

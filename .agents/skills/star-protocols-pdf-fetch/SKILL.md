@@ -29,17 +29,18 @@ node scripts/fetch_star_protocols_pdf.mjs \
 
 When Browserless is remote and only exposes plain HTTP, prefer an SSH tunnel instead of transmitting its token publicly. The helper accepts any endpoint reachable from the machine running it.
 
-The helper performs these stages:
+The helper performs these stages in one Browserless `/function` session so the
+article challenge clearance and publisher cookies are retained for the PDF:
 
-1. POST `/content` for the supplied full-text URL, optionally with `solveCaptchas: true`, and retain the rendered HTML.
-2. Extract the actual `/action/showPdf?...` link from that HTML. Do not guess a PDF URL from the article identifier when the rendered page provides one.
-3. Start a stealth Browserless `/function` session, visit the article to establish publisher state, and navigate to the extracted PDF with the article as referrer.
+1. Visit the supplied full-text URL, optionally solving a detected Turnstile challenge.
+2. Extract the actual `/action/showPdf?...` link from the live article DOM. Do not guess a PDF URL from the article identifier when the rendered page provides one.
+3. Navigate to that PDF with the article as referrer in the same page and session.
 4. Intercept the `showPdf` response at the Chrome DevTools `Fetch` response stage. This captures the publisher bytes before Chrome's PDF extension substitutes its viewer document.
 5. Require HTTP `200` and `%PDF-` magic before writing the file. Report the title, discovered URL, byte count, and SHA-256.
 
 ## Failure handling
 
-- If `/content` reports that `TWO_CAPTCHA_API_KEY` is missing, recreate the Browserless container after updating its `--env-file`; `docker restart` does not load newly added environment variables.
+- If `/function` reports that `TWO_CAPTCHA_API_KEY` is missing, recreate the Browserless container after updating its `--env-file`; `docker restart` does not load newly added environment variables.
 - If the article succeeds but a plain PDF request returns `403`, do not retry plain HTTP repeatedly. Use the bundled CDP response capture.
 - If the browser response is HTML with `application/pdf`, it is probably Chrome's PDF viewer wrapper, not the PDF. The `%PDF-` check must still pass.
 - Preserve an existing output file unless the user explicitly permits replacement; choose a distinct filename for retests.

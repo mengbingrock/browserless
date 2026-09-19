@@ -62,15 +62,21 @@ describe('TwoCaptchaPageSolver', function () {
           <body></body>
           <script>
             window.turnstile = {
-              render: () => 'original'
+              render: function (_container, _options) {
+                document.body.dataset.rendered = 'true';
+                return 'original';
+              }
             };
-            window.turnstile.render(null, {
-              action: 'managed',
-              callback: token => document.body.dataset.token = token,
-              cData: 'captured-data',
-              chlPageData: 'captured-page-data',
-              sitekey: 'captured-site-key'
-            });
+            window.khCN8 = () => {
+              window.turnstile.render(null, {
+                action: 'managed',
+                callback: token => document.body.dataset.token = token,
+                cData: 'captured-data',
+                chlPageData: 'captured-page-data',
+                sitekey: 'captured-site-key'
+              });
+            };
+            window.khCN8();
           </script>
         `)}`,
       );
@@ -87,6 +93,9 @@ describe('TwoCaptchaPageSolver', function () {
       expect(await page.evaluate(() => document.body.dataset.token)).to.equal(
         '2captcha-token',
       );
+      expect(
+        await page.evaluate(() => document.body.dataset.rendered),
+      ).to.equal('true');
     } finally {
       await browser.close();
     }

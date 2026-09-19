@@ -24,6 +24,8 @@ import functionHandler from './utils/function/handler.js';
 interface JSONSchema {
   code: string;
   context?: { [key: string]: ContextValue };
+  /** Solve a detected Cloudflare Turnstile challenge during `goto`. */
+  solveCaptchas?: boolean;
 }
 
 export type BodySchema = JSONSchema | string;
@@ -56,6 +58,11 @@ export default class ChromiumFunctionPostRoute extends BrowserHTTPRoute {
   method = Methods.post;
   path = [HTTPRoutes.chromiumFunction, HTTPRoutes.function];
   tags = [APITags.browserAPI];
+  defaultLaunchOptions = (req: Request) => ({
+    stealth: Boolean(
+      (req.body as Partial<JSONSchema> | undefined)?.solveCaptchas,
+    ),
+  });
   async handler(
     req: Request,
     res: ServerResponse,
@@ -66,6 +73,9 @@ export default class ChromiumFunctionPostRoute extends BrowserHTTPRoute {
     const timeout = req.parsed.searchParams.get('timeout');
     const handler = functionHandler(config, logger, {
       protocolTimeout: timeout ? +timeout : undefined,
+      solveCaptchas: Boolean(
+        (req.body as Partial<JSONSchema> | undefined)?.solveCaptchas,
+      ),
     });
     const { contentType, payload, page } = await handler(req, browser);
 

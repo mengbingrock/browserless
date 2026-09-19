@@ -1,5 +1,11 @@
-import { Browserless, Config, Metrics } from '@browserless.io/browserless';
+import {
+  Browserless,
+  Config,
+  Metrics,
+  Request,
+} from '@browserless.io/browserless';
 import { expect } from 'chai';
+import ChromiumFunctionPostRoute from '../../../shared/function.http.js';
 
 describe('/chromium/function API', function () {
   let browserless: Browserless;
@@ -13,7 +19,24 @@ describe('/chromium/function API', function () {
   };
 
   afterEach(async () => {
-    await browserless.stop();
+    await browserless?.stop();
+  });
+
+  it('enables stealth when CAPTCHA solving is requested', () => {
+    const route = new ChromiumFunctionPostRoute(
+      undefined as never,
+      undefined as never,
+      undefined as never,
+      undefined as never,
+      undefined as never,
+      undefined as never,
+      undefined as never,
+    );
+    const launchOptions = (
+      route.defaultLaunchOptions as (req: Request) => { stealth?: boolean }
+    )({ body: { solveCaptchas: true } } as Request);
+
+    expect(launchOptions).to.deep.equal({ stealth: true });
   });
 
   it('runs functions', async () => {

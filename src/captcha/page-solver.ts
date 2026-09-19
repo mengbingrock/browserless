@@ -10,7 +10,7 @@ import {
   TwoCaptchaTimeoutError,
   sleep,
 } from '@browserless.io/browserless';
-import { HTTPResponse, Page } from 'puppeteer-core';
+import { CDPSession, HTTPResponse, Page } from 'puppeteer-core';
 
 interface TurnstileCapture extends TwoCaptchaTask {
   action?: string;
@@ -22,23 +22,8 @@ interface TurnstileCapture extends TwoCaptchaTask {
   websiteURL: string;
 }
 
-const captureFunctionName = '__browserlessTwoCaptchaCapture';
-
 type CapturingWindow = Window & {
   __browserlessTwoCaptchaCallback?: (token: string) => unknown;
-  __browserlessTwoCaptchaCapture?: (task: TurnstileCapture) => void;
-  turnstile?: {
-    render: (
-      container: unknown,
-      options: {
-        action?: string;
-        callback?: (token: string) => unknown;
-        cData?: string;
-        chlPageData?: string;
-        sitekey: string;
-      },
-    ) => string;
-  };
 };
 
 /**
@@ -53,6 +38,8 @@ export class TwoCaptchaPageSolver {
       this.captureResolver = resolve;
     },
   );
+  protected debuggerClient?: CDPSession;
+  protected renderBreakpointId?: string;
   protected prepared = false;
 
   constructor(
@@ -67,59 +54,117 @@ export class TwoCaptchaPageSolver {
     if (this.prepared) return;
     this.prepared = true;
 
-    await this.page.exposeFunction(
-      captureFunctionName,
-      (task: TurnstileCapture) => {
-        if (this.capture) return;
-        this.capture = task;
-        this.captureResolver?.(task);
-      },
-    );
-
-    await this.page.evaluateOnNewDocument((detectionTimeout: number) => {
-      const pageWindow = window as CapturingWindow;
-      const intercept = (
-        turnstile: NonNullable<CapturingWindow['turnstile']>,
-      ) => {
-        if (turnstile.render.name === 'browserlessTurnstileRender') return;
-        turnstile.render = function browserlessTurnstileRender(
-          _container,
-          options,
-        ) {
-          pageWindow.__browserlessTwoCaptchaCallback = options.callback;
-          pageWindow.__browserlessTwoCaptchaCapture?.({
-            action: options.action,
-            data: options.cData,
-            pagedata: options.chlPageData,
-            type: 'TurnstileTaskProxyless',
-            userAgent: navigator.userAgent,
-            websiteKey: options.sitekey,
-            websiteURL: window.location.href,
-          });
-          return 'browserless-turnstile';
-        };
-      };
-
-      let turnstileValue = pageWindow.turnstile;
+    const installOnloadHook = (name: string) => {
+      const pageWindow = window as unknown as Window & Record<string, unknown>;
+      const marker = `__browserlessTurnstileOnload_${name}`;
+      if (pageWindow[marker]) return;
+      pageWindow[marker] = true;
+      let callback = pageWindow[name];
       try {
-        Object.defineProperty(pageWindow, 'turnstile', {
+        Object.defineProperty(pageWindow, name, {
           configurable: true,
-          get: () => turnstileValue,
-          set: (value: NonNullable<CapturingWindow['turnstile']>) => {
-            turnstileValue = value;
-            if (value) intercept(value);
+          get: () =>
+            function browserlessTurnstileOnload(
+              this: unknown,
+              ...args: unknown[]
+            ) {
+              debugger;
+              return typeof callback === 'function'
+                ? callback.apply(this, args)
+                : undefined;
+            },
+          set: (value: unknown) => {
+            callback = value;
           },
         });
       } catch {
-        // The polling fallback below also covers non-configurable globals.
+        // A non-configurable callback cannot be wrapped safely.
       }
-      const timer = window.setInterval(() => {
-        if (!pageWindow.turnstile) return;
-        window.clearInterval(timer);
-        intercept(pageWindow.turnstile);
-      }, 10);
-      window.setTimeout(() => window.clearInterval(timer), detectionTimeout);
-    }, this.detectionTimeoutMs);
+    };
+
+    await this.page.evaluateOnNewDocument(installOnloadHook, 'khCN8');
+    this.page.on('request', (request) => {
+      try {
+        const url = new URL(request.url());
+        if (
+          url.hostname !== 'challenges.cloudflare.com' ||
+          !url.pathname.includes('/turnstile/') ||
+          !url.pathname.endsWith('/api.js')
+        ) {
+          return;
+        }
+        const onload = url.searchParams.get('onload');
+        if (!onload) return;
+        this.page.evaluate(installOnloadHook, onload).catch(() => {});
+      } catch {
+        // Ignore malformed and non-HTTP request URLs.
+      }
+    });
+
+    const client = await this.page.createCDPSession();
+    this.debuggerClient = client;
+    await client.send('Debugger.enable');
+    client.on('Debugger.paused', async (event) => {
+      const frame = event.callFrames[0];
+      this.logger.debug(
+        `Turnstile debugger paused in ${frame?.functionName || 'anonymous'}`,
+      );
+      if (!frame) {
+        await client.send('Debugger.resume').catch(() => {});
+        return;
+      }
+
+      try {
+        if (this.renderBreakpointId) {
+          const evaluated = await client.send('Debugger.evaluateOnCallFrame', {
+            callFrameId: frame.callFrameId,
+            expression: `(() => {
+              const options = arguments[1] || {};
+              window.__browserlessTwoCaptchaCallback = options.callback;
+              return {
+                action: options.action,
+                data: options.cData,
+                pagedata: options.chlPageData,
+                type: 'TurnstileTaskProxyless',
+                userAgent: navigator.userAgent,
+                websiteKey: options.sitekey,
+                websiteURL: location.href,
+              };
+            })()`,
+            returnByValue: true,
+          });
+          const task = evaluated.result.value as TurnstileCapture | undefined;
+          this.logger.debug(
+            `Turnstile render capture ${task?.websiteKey ? 'contained a site key' : 'was incomplete'}`,
+          );
+          if (task?.websiteKey && !this.capture) {
+            this.capture = task;
+            this.captureResolver?.(task);
+          }
+          await client
+            .send('Debugger.removeBreakpoint', {
+              breakpointId: this.renderBreakpointId,
+            })
+            .catch(() => {});
+          this.renderBreakpointId = undefined;
+        } else {
+          const evaluated = await client.send('Debugger.evaluateOnCallFrame', {
+            callFrameId: frame.callFrameId,
+            expression: 'window.turnstile && window.turnstile.render',
+          });
+          if (evaluated.result.objectId) {
+            const breakpoint = await client.send(
+              'Debugger.setBreakpointOnFunctionCall',
+              { objectId: evaluated.result.objectId },
+            );
+            this.renderBreakpointId = breakpoint.breakpointId;
+            this.logger.debug('Turnstile render breakpoint installed');
+          }
+        }
+      } finally {
+        await client.send('Debugger.resume').catch(() => {});
+      }
+    });
   }
 
   public async solveIfPresent(

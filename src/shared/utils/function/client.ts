@@ -4,8 +4,15 @@ import { _connectToCdpBrowser as connect } from 'puppeteer-core/internal/cdp/Bro
 
 type codeHandler = (params: {
   context: unknown;
+  goto: Page['goto'];
   page: Page;
 }) => Promise<unknown>;
+
+declare global {
+  interface Window {
+    __browserlessWaitForCaptcha?: () => Promise<void>;
+  }
+}
 
 // puppeteer-core >= 25.6 requires an explicit Logger on these internals.
 const logger = () => undefined;
@@ -25,6 +32,7 @@ export class FunctionRunner {
     options: {
       downloadPath?: string;
       protocolTimeout?: number;
+      solveCaptchas?: boolean;
     };
   }) {
     console.log(`/function.js: Got endpoint: "${data.browserWSEndpoint}"`);
@@ -50,6 +58,20 @@ export class FunctionRunner {
     this.browser.once('disconnected', () => this.stop());
     this.page = await this.browser.newPage();
 
+    let goto = this.page.goto.bind(this.page);
+    if (options.solveCaptchas) {
+      await this.page.waitForFunction(
+        () => typeof window.__browserlessWaitForCaptcha === 'function',
+        { timeout: options.protocolTimeout },
+      );
+      const browserGoto = goto;
+      goto = async (...args: Parameters<Page['goto']>) => {
+        const response = await browserGoto(...args);
+        await this.page!.evaluate(() => window.__browserlessWaitForCaptcha?.());
+        return response;
+      };
+    }
+
     if (options.downloadPath) {
       console.debug(
         `_browserless_function_client_: Setting downloads for page to "${options.downloadPath}"`,
@@ -62,11 +84,13 @@ export class FunctionRunner {
       });
     }
 
-    const response = await code({ context, page: this.page }).catch((e) => {
-      console.error(`Error running code: ${e}`);
-      this.browser?.disconnect();
-      throw e;
-    });
+    const response = await code({ context, goto, page: this.page }).catch(
+      (e) => {
+        console.error(`Error running code: ${e}`);
+        this.browser?.disconnect();
+        throw e;
+      },
+    );
     console.debug(
       `_browserless_function_client_: Code is finished executing, closing page.`,
     );
