@@ -103,6 +103,16 @@ export default async ({ page, context, goto }) => {
           });
           return;
         }
+        if (event.responseStatusCode === 403) {
+          // Let the challenged PDF navigation render in this same page. The
+          // Browserless goto helper will solve it, and this interceptor will
+          // capture the subsequent successful PDF response without losing the
+          // article session's cookies or browser fingerprint.
+          await client.send('Fetch.continueRequest', {
+            requestId: event.requestId,
+          });
+          return;
+        }
         if (event.responseStatusCode !== 200) {
           throw new Error(
             'PDF navigation failed with HTTP ' + event.responseStatusCode,
