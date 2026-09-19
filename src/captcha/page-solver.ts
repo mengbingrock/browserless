@@ -238,6 +238,18 @@ export class TwoCaptchaPageSolver {
       navigation,
       sleep(Math.min(this.navigationTimeoutMs, 10_000)).then(() => null),
     ]);
+    const settleTimeout = Math.min(this.navigationTimeoutMs, 30_000);
+    await this.page
+      .waitForFunction(
+        () =>
+          !/[?&]__cf_chl_/i.test(location.href) &&
+          !/just a moment/i.test(document.title),
+        { polling: 250, timeout: settleTimeout },
+      )
+      .catch(() => undefined);
+    await this.page
+      .waitForNetworkIdle({ idleTime: 1_000, timeout: settleTimeout })
+      .catch(() => undefined);
     this.logger.info('2Captcha Turnstile solution submitted');
     return solvedResponse ?? response ?? undefined;
   }
