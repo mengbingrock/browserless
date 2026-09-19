@@ -100,6 +100,16 @@ describe('TwoCaptchaPageSolver', function () {
       expect(
         await page.evaluate(() => document.body.dataset.rendered),
       ).to.equal('true');
+
+      await page.evaluate(() => {
+        delete (
+          window as Window & {
+            __browserlessTwoCaptchaCallback?: unknown;
+          }
+        ).__browserlessTwoCaptchaCallback;
+        document.title = 'Search results';
+      });
+      await solver.solveIfPresent();
     } finally {
       await browser.close();
     }

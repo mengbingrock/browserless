@@ -225,14 +225,33 @@ export class TwoCaptchaPageSolver {
         waitUntil: 'networkidle2',
       })
       .catch(() => null);
-    await this.page.evaluate((solution: string) => {
+    const submission = await this.page.evaluate((solution: string) => {
       const callback = (window as CapturingWindow)
         .__browserlessTwoCaptchaCallback;
-      if (typeof callback !== 'function') {
-        throw new Error('Turnstile callback is no longer available');
+      if (typeof callback === 'function') {
+        callback(solution);
+        return 'submitted';
       }
-      callback(solution);
+
+      const challengeStillPresent =
+        /[?&]__cf_chl_/i.test(location.href) ||
+        /just a moment|attention required/i.test(document.title) ||
+        Boolean(
+          document.querySelector(
+            'script[src*="challenges.cloudflare.com/turnstile/"]',
+          ),
+        );
+      return challengeStillPresent ? 'missing' : 'already-cleared';
     }, token);
+    if (submission === 'missing') {
+      throw new Error('Turnstile callback is no longer available');
+    }
+    if (submission === 'already-cleared') {
+      this.logger.info(
+        'Turnstile challenge cleared before the solver callback returned',
+      );
+      return response ?? undefined;
+    }
 
     const solvedResponse = await Promise.race([
       navigation,
