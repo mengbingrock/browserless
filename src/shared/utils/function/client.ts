@@ -60,6 +60,29 @@ export class FunctionRunner {
 
     let goto = this.page.goto.bind(this.page);
     if (options.solveCaptchas) {
+      const waitForCaptcha = async () => {
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          try {
+            await this.page!.waitForFunction(
+              () => typeof window.__browserlessWaitForCaptcha === 'function',
+              { timeout: options.protocolTimeout },
+            );
+            await this.page!.evaluate(() =>
+              window.__browserlessWaitForCaptcha?.(),
+            );
+            return;
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            const contextWasReplaced =
+              /Execution context was destroyed|Cannot find context|detached Frame/i.test(
+                message,
+              );
+            if (!contextWasReplaced || attempt === 9) throw error;
+          }
+        }
+      };
+
       await this.page.waitForFunction(
         () => typeof window.__browserlessWaitForCaptcha === 'function',
         { timeout: options.protocolTimeout },
@@ -67,7 +90,7 @@ export class FunctionRunner {
       const browserGoto = goto;
       goto = async (...args: Parameters<Page['goto']>) => {
         const response = await browserGoto(...args);
-        await this.page!.evaluate(() => window.__browserlessWaitForCaptcha?.());
+        await waitForCaptcha();
         return response;
       };
     }
