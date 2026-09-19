@@ -37,6 +37,14 @@ COPY --from=builder $APP_DIR/build ./build
 COPY --from=builder $APP_DIR/static ./static
 COPY --from=builder $APP_DIR/extensions ./extensions
 
+# This image installs Chromium only. Point route discovery at a curated tree so
+# startup does not try to register Chrome, Edge, Firefox, or WebKit routes whose
+# browser binaries are intentionally absent.
+RUN mkdir -p ./build/enabled-routes && \
+    cp -R ./build/routes/chromium ./build/enabled-routes/ && \
+    cp -R ./build/routes/management ./build/enabled-routes/
+ENV ROUTES=$APP_DIR/build/enabled-routes
+
 RUN chown -R blessuser:blessuser $APP_DIR
 
 USER blessuser
